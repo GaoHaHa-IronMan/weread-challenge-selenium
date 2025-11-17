@@ -17,7 +17,7 @@ const http = require("http");
 const { execSync, spawnSync } = require("child_process");
 const os = require("os");
 
-const WEREAD_VERSION = "0.11.0";
+const WEREAD_VERSION = "0.12.0";
 const COOKIE_FILE = "./data/cookies.json"; // Path to save/load cookies
 const LOGIN_QR_CODE = "./data/login.png"; // Path to save login QR code
 const URL = "https://weread.qq.com/"; // Replace with the target URL
@@ -654,7 +654,7 @@ async function sendMail(subject, text, filePaths = []) {
 async function sendBark(title, body, options = {}) {
   if (!BARK_KEY) {
     console.info("Bark推送密钥未配置");
-    return false;
+    return;
   }
 
   const {
@@ -693,40 +693,43 @@ async function sendBark(title, body, options = {}) {
 
   console.info("发送Bark推送:", barkUrl);
 
-  try {
-    const httpModule = barkUrl.startsWith("https://") ? https : http;
+  return new Promise((resolve) => {
+    try {
+      const httpModule = barkUrl.startsWith("https://") ? https : http;
 
-    const req = httpModule.request(barkUrl, {
-      method: "GET",
-      headers: {
-        "User-Agent": "WeRead-Tracker/1.0"
-      }
-    }, (res) => {
-      let responseData = "";
-
-      res.on("data", (chunk) => {
-        responseData += chunk;
-      });
-
-      res.on("end", () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          console.info("Bark推送发送成功");
-        } else {
-          console.error(`Bark推送失败: ${res.statusCode} - ${responseData}`);
+      const req = httpModule.request(barkUrl, {
+        method: "GET",
+        headers: {
+          "User-Agent": "WeRead-Tracker/1.0"
         }
+      }, (res) => {
+        let responseData = "";
+
+        res.on("data", (chunk) => {
+          responseData += chunk;
+        });
+
+        res.on("end", () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            console.info("Bark推送发送成功");
+          } else {
+            console.error(`Bark推送失败: ${res.statusCode} - ${responseData}`);
+          }
+          resolve();
+        });
       });
-    });
 
-    req.on("error", (error) => {
-      console.error("Bark推送请求错误:", error.message);
-    });
+      req.on("error", (error) => {
+        console.error("Bark推送请求错误:", error.message);
+        resolve();
+      });
 
-    req.end();
-    return true;
-  } catch (error) {
-    console.error("Bark推送异常:", error);
-    return false;
-  }
+      req.end();
+    } catch (error) {
+      console.error("Bark推送异常:", error);
+      resolve();
+    }
+  });
 }
 
 async function main() {
@@ -739,6 +742,26 @@ async function main() {
     level: "active",
     sound: "beginning"
   });
+
+  // 随机休眠0～1800秒 (0～30分钟)
+  const randomSeconds = Math.random() * 1800;
+  const sleepTime = Math.floor(randomSeconds * 1000);
+  const sleepMinutes = Math.floor(randomSeconds / 60);
+  const remainingSeconds = Math.floor(randomSeconds % 60);
+  console.info(`Will sleep for ${sleepMinutes}分${remainingSeconds}秒.`);
+  await sendBark("微信读书挑战", `脚本将休眠 ${sleepMinutes}分${remainingSeconds}秒`, {
+    subtitle: "开始休眠",
+    level: "active",
+    sound: "minuet"
+  });
+  await new Promise((resolve) => setTimeout(resolve, sleepTime));
+  console.info("Waking up from sleep.");
+  await sendBark("微信读书挑战", "脚本已从休眠中唤醒", {
+    subtitle: "休眠结束",
+    level: "active",
+    sound: "glass"
+  });
+
   try {
     const capabilities = {
       browserName: WEREAD_BROWSER,
