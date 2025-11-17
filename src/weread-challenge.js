@@ -1052,13 +1052,19 @@ async function main() {
       10000
     );
 
-    // get all buttons with title equal to "目录"
+    // 切换到"上下滚动阅读"模式
+    // OLD: 通过 title="切换到上下滚动阅读" 定位
+    // NEW: 通过 class "readerControls_item" + "isHorizontalReader" 定位
     let switchButton = await driver.findElements(
-      By.xpath("//button[@title='切换到上下滚动阅读']")
+      By.xpath(
+        "//button[@title='切换到上下滚动阅读'] | //button[contains(@class, 'readerControls_item') and contains(@class, 'isHorizontalReader')]"
+      )
     );
     if (switchButton.length > 0) {
       await switchButton[0].click();
       console.info("Switched to vertical scroll mode.");
+    } else {
+      console.warn('未找到用于切换为上下滚动阅读的按钮（兼容新老版本定位）');
     }
 
     // Wait for button with title "目录"
@@ -1139,13 +1145,18 @@ async function main() {
       // check if the doc title contains "已读完"
       let title = await driver.getTitle();
       let needToJump = title.includes("已读完");
+      const needToJumpReasons = [];
+      if (needToJump) {
+        needToJumpReasons.push('标题包含 "已读完"');
+      }
       // check if got a "span" contains text "开通后即可阅读"
       let openBook = await driver.findElements(
         By.xpath("//span[contains(text(), '开通后即可阅读')]")
       );
       if (openBook.length > 0) {
-        console.warn("Need to open the book.");
+        console.warn("需要打开书籍");
         needToJump = true;
+        needToJumpReasons.push("需要打开书籍");
       }
 
       // find element div with class "readerFooter_ending_title" and content contains "全 书 完"
@@ -1153,12 +1164,18 @@ async function main() {
         By.xpath("//div[contains(text(), '全 书 完')]")
       );
       if (readComplete.length > 0) {
-        console.warn("Book completed.");
+        console.warn("书籍已读完");
         needToJump = true;
+        needToJumpReasons.push("书籍已读完");
       }
 
       if (needToJump) {
-        console.warn("Book completed.");
+        console.warn(
+          "needToJump = true, reasons: " +
+            (needToJumpReasons.length
+              ? needToJumpReasons.join(" | ")
+              : "unknown")
+        );
         // jump to the top
         // click the buttion "目录"
         let catalogs = await driver.findElements(
