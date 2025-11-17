@@ -7,6 +7,7 @@
  * 修改请保留统计代码
  */
 
+require('dotenv').config();
 const { By, Builder, Browser, until, Key } = require("selenium-webdriver");
 const assert = require("assert");
 const fs = require("fs");
@@ -16,7 +17,7 @@ const http = require("http");
 const { execSync, spawnSync } = require("child_process");
 const os = require("os");
 
-const WEREAD_VERSION = "0.10.0";
+const WEREAD_VERSION = "0.11.0";
 const COOKIE_FILE = "./data/cookies.json"; // Path to save/load cookies
 const LOGIN_QR_CODE = "./data/login.png"; // Path to save login QR code
 const URL = "https://weread.qq.com/"; // Replace with the target URL
@@ -25,13 +26,13 @@ const WEREAD_USER = process.env.WEREAD_USER || "weread-default"; // User to use
 const WEREAD_REMOTE_BROWSER = process.env.WEREAD_REMOTE_BROWSER;
 const WEREAD_DURATION = process.env.WEREAD_DURATION || 10; // Reading duration in minutes
 const WEREAD_SPEED = process.env.WEREAD_SPEED || "slow"; // Reading speed, slow | normal | fast
-const WEREAD_SELECTION = process.env.WEREAD_SELECTION || 2; // Selection method
 const WEREAD_BROWSER = process.env.WEREAD_BROWSER || Browser.CHROME; // Browser to use, chrome | MicrosoftEdge | firefox
 const ENABLE_EMAIL = process.env.ENABLE_EMAIL === "true" || false; // Enable email notifications
-const WEREAD_AGREE_TERMS = process.env.WEREAD_AGREE_TERMS === "true" || true; // Agree to terms
+const WEREAD_AGREE_TERMS = process.env.WEREAD_AGREE_TERMS !== "false"; // Agree to terms
 const EMAIL_PORT = parseInt(process.env.EMAIL_PORT) || 465; // SMTP port number, default 465
 const BARK_KEY = process.env.BARK_KEY || ""; // Bark推送密钥
 const BARK_SERVER = process.env.BARK_SERVER || "https://api.day.app"; // Bark服务器地址
+const WEREAD_KEYWORDS = process.env.WEREAD_KEYWORDS || ""; // book selection keywords, comma separated
 const QR_EXPIRED_TEXTS = ["点击刷新二维码", "二维码已失效"]; // 登录二维码过期提示
 // env vars:
 // WEREAD_REMOTE_BROWSER
@@ -957,6 +958,16 @@ async function main() {
 
     console.info("Successfully logged in.");
 
+    try {
+        const shelfUrl = "https://weread.qq.com/web/shelf";
+        console.info(`Navigating directly to bookshelf URL: ${shelfUrl}`);
+        await driver.get(shelfUrl);
+        await driver.wait(until.urlContains('/web/shelf'), 5000); // Wait for URL to be correct
+        console.info("Successfully navigated to bookshelf.");
+    } catch (e) {
+        console.warn("Failed to navigate to bookshelf URL directly. Assuming current page is correct.", e.message);
+    }
+
     // If cookies exist, save them
     await saveCookies(driver, COOKIE_FILE);
 
@@ -964,50 +975,75 @@ async function main() {
       logEventToWereadLog("");
     }
 
-    // Find the first div with class "wr_index_mini_shelf_card"
-    let selection = Number(WEREAD_SELECTION);
+    // Book selection logic starts
+    let isBookReady = false;
+    let selectedBookTitle = "Unknown Book";
     const DEFAULT_MOUSE_BOOK_URL = "https://weread.qq.com/web/reader/276323e0813ab90a5g0144d7";
+    // Use the correct selector for books on the shelf
+    const allBooks = await driver.findElements(By.css("a.shelfBook"));
 
-    if (selection === -1) {
-      console.info("WEREAD_SELECTION=-1，尝试打开《胆小如鼠》。");
-      const targetBookCards = await driver.findElements(
-        By.xpath("//div[@class='wr_index_mini_shelf_card' and .//div[contains(text(), '胆小如鼠')]]"),
-        5000
-      );
-
-      if (targetBookCards.length > 0) {
-        const clickResult = await safeClickElement(driver, targetBookCards[0], "《胆小如鼠》书籍卡片");
-        if (!clickResult) {
-          console.warn("点击《胆小如鼠》卡片失败，改为直接跳转链接。");
-          await driver.get(DEFAULT_MOUSE_BOOK_URL);
-        }
-      } else {
-        console.warn("未在书架找到《胆小如鼠》，直接跳转阅读链接。");
-        await driver.get(DEFAULT_MOUSE_BOOK_URL);
-      }
-
-      await driver.wait(until.titleContains("胆小如鼠"), 10000);
-    } else {
-      if (selection === 0) {
-        // random selection between 1 and 4
-        selection = Math.floor(Math.random() * 4) + 1;
-      }
-      let books = await driver.findElements(
-        // By.xpath("(//div[@class='wr_index_mini_shelf_card'])[" + selection + "]"),
-        By.xpath("//div[@class='wr_index_mini_shelf_card']"),
-        10000
-      );
-      if (books.length > 0 && books.length < selection) {
-        await books[0].click();
-        console.info("Clicked on the first book.");
-      } else if (books.length >= selection) {
-        await books[selection - 1].click();
-        console.info("Clicked on the ", selection, "th book.");
-      } else {
-        console.warn("No book link found. Using the default link.");
+    if (allBooks.length === 0) {
+        console.warn("No books found on the shelf. Using the default book link.");
         await driver.get(DEFAULT_MOUSE_BOOK_URL);
         await driver.wait(until.titleContains("胆小如鼠"), 10000);
-      }
+        selectedBookTitle = "胆小如鼠";
+        isBookReady = true;
+    } else {
+        const keywords = WEREAD_KEYWORDS ? WEREAD_KEYWORDS.split(',').map(k => k.trim()).filter(k => k.length > 0) : [];
+
+        if (keywords.length === 0) {
+            if (WEREAD_KEYWORDS) { // It was set but empty
+                console.warn("WEREAD_KEYWORDS is set but contains no valid keywords. Defaulting to reading the first book on the shelf.");
+            } else { // It was not set at all
+                console.info("WEREAD_KEYWORDS is not set. Defaulting to reading the first book on the shelf.");
+            }
+            try {
+                // Use the correct selector for the title
+                const titleElement = await allBooks[0].findElement(By.css('div.title'));
+                selectedBookTitle = await titleElement.getText();
+            } catch (e) { console.warn("Could not get book title for notification."); }
+            await safeClickElement(driver, allBooks[0], "first book on shelf");
+            isBookReady = true;
+        } else {
+            console.info(`Using keywords to find a book: [${keywords.join(', ')}]`);
+            const matchedBooks = [];
+            for (const book of allBooks) {
+              try {
+                // Use the correct selector for the title
+                const titleElement = await book.findElement(By.css('div.title'));
+                const title = await titleElement.getText();
+                if (keywords.some(keyword => title.includes(keyword))) {
+                  matchedBooks.push({element: book, title: title});
+                }
+              } catch (e) {
+                console.debug("Could not find title for a book card. Error: " + e.message);
+              }
+            }
+
+            if (matchedBooks.length > 0) {
+              console.info(`Found ${matchedBooks.length} books matching keywords: [${keywords.join(', ')}].`);
+              const randomIndex = Math.floor(Math.random() * matchedBooks.length);
+              const selectedBook = matchedBooks[randomIndex];
+              selectedBookTitle = selectedBook.title;
+              console.info(`Randomly selected to read: "${selectedBook.title}"`);
+              await safeClickElement(driver, selectedBook.element, `book "${selectedBook.title}"`);
+              isBookReady = true;
+            } else {
+              console.warn(`No books found on the shelf matching keywords: [${WEREAD_KEYWORDS}].`);
+              isBookReady = false;
+            }
+        }
+    }
+
+    if (!isBookReady) {
+      const errorMessage = `Failed to select a book. Please check your WEREAD_KEYWORDS or add books to your shelf.`;
+      console.error(errorMessage);
+      await sendBark("微信读书挑战", "选书失败", {
+        subtitle: "项目停滞",
+        level: "critical",
+        sound: "alarm"
+      });
+      return;
     }
 
     // get button with title equal to "目录"
@@ -1038,12 +1074,12 @@ async function main() {
         .then((image, err) =>
           fs.writeFileSync("./data/screenshot.png", image, "base64")
         );
-      await sendMail("[项目进展--项目启动]", "Login successful.", [
+      await sendMail(`[项目进展--开始阅读]`, `Started reading: ${selectedBookTitle}`, [
         "./data/screenshot.png",
       ]);
     }
-    await sendBark("微信读书挑战", "登录成功", {
-      subtitle: "项目启动",
+    await sendBark("微信读书挑战", `开始阅读:《${selectedBookTitle}》`, {
+      subtitle: "选书成功",
       level: "active",
       sound: "birdsong"
     });
