@@ -13,7 +13,7 @@ wget https://raw.githubusercontent.com/GaoHaHa-IronMan/weread-challenge-selenium
 
 # 3. (可选) 修改配置
 # 使用你喜欢的编辑器（如 vim、nano）打开 docker-compose.yml 文件
-# nano docker-compose.yml
+# vim docker-compose.yml
 #
 # 根据需要修改 environment 部分的配置:
 #   - WEREAD_DURATION: 阅读时长，可以是固定值(如 68)或范围(如 "60-90")
